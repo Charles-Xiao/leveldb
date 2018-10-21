@@ -24,10 +24,12 @@ MemTable::MemTable(const InternalKeyComparator& cmp)
       table_(comparator_, &arena_) {
 }
 
+// Memtable 本身基于引用计数来管理，当外部使用到该 Memtable 时，其引用计数加一；当没有外部使用者时，该 Memtable 占用的内存将全部被释放
 MemTable::~MemTable() {
   assert(refs_ == 0);
 }
 
+// 返回该 Memtable 的非精确的内存使用量
 size_t MemTable::ApproximateMemoryUsage() { return arena_.MemoryUsage(); }
 
 int MemTable::KeyComparator::operator()(const char* aptr, const char* bptr)

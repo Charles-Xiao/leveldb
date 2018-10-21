@@ -4,13 +4,16 @@
 
 #include "util/coding.h"
 
+// “Base 128 Varints”编码，即变长编码, 也就是1byte可以表示[0,127]的数字, 比一个int占用4个byte节省空间
+// leveldb所有数据都是字符形式，即使是整型，也将被转换为字符型存储。这样的好处就是可以减少内存空间的使用。
 namespace leveldb {
 
 void EncodeFixed32(char* buf, uint32_t value) {
-  if (port::kLittleEndian) {
+  if (port::kLittleEndian) { // 如果是小端，直接内存复制即可
     memcpy(buf, &value, sizeof(value));
   } else {
-    buf[0] = value & 0xff;
+    //大端模式: 按字节对齐，逐字节复制，确保从低位开始复制
+    buf[0] = value & 0xff; // 0xff = 00000000000000000000000011111111 = 255 = 15 * 16 + 15
     buf[1] = (value >> 8) & 0xff;
     buf[2] = (value >> 16) & 0xff;
     buf[3] = (value >> 24) & 0xff;
@@ -44,6 +47,7 @@ void PutFixed64(std::string* dst, uint64_t value) {
   dst->append(buf, sizeof(buf));
 }
 
+// 从v最低位开始，每七位记录到dst数组, 第八位表示是否需要用到下一个byte
 char* EncodeVarint32(char* dst, uint32_t v) {
   // Operate on characters as unsigneds
   unsigned char* ptr = reinterpret_cast<unsigned char*>(dst);
@@ -51,8 +55,8 @@ char* EncodeVarint32(char* dst, uint32_t v) {
   if (v < (1<<7)) {
     *(ptr++) = v;
   } else if (v < (1<<14)) {
-    *(ptr++) = v | B;
-    *(ptr++) = v>>7;
+    *(ptr++) = v | B; // v的低7位复制为ptr的低7位，ptr第8位为1，表示高位还有数据
+    *(ptr++) = v>>7; // 再把v的高7位复制为（ptr+1)的低7位，(ptr+1)第8位为0，表示高位没有数据
   } else if (v < (1<<21)) {
     *(ptr++) = v | B;
     *(ptr++) = (v>>7) | B;
@@ -109,6 +113,8 @@ int VarintLength(uint64_t v) {
   return len;
 }
 
+// 解析varint32函数: 取出字符数组的每一个字节，然后取出低7位的值，赋值给result的低7位。
+// 如果有第二个字节，则取出第二个字节得到低7位，向左移动7位，然后赋给result的8~14位
 const char* GetVarint32PtrFallback(const char* p,
                                    const char* limit,
                                    uint32_t* value) {

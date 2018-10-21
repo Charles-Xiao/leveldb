@@ -101,6 +101,8 @@ class LEVELDB_EXPORT Cache {
   void LRU_Append(Handle* e);
   void Unref(Handle* e);
 
+  //  pimpl idiom: 将文件间的编译依存关系降至最低
+  // 任何对于 Rep 的未来修改都不需要重新编译使用到 cache 的文件，从而实现编译依存性的最小化
   struct Rep;
   Rep* rep_;
 };

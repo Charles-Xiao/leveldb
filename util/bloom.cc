@@ -14,10 +14,12 @@ static uint32_t BloomHash(const Slice& key) {
   return Hash(key.data(), key.size(), 0xbc9f1d34);
 }
 
+// leveldb的过滤器主要作用是当从磁盘读取数据时,可以通过过滤器先判断读取的键值是否在读取的data block中,
+// 如果在,则读取,如果不在,则直接空值返回,在一定程度上较少了磁盘IO.
 class BloomFilterPolicy : public FilterPolicy {
  private:
-  size_t bits_per_key_;
-  size_t k_;
+  size_t bits_per_key_; // 每个key的比特位数
+  size_t k_; // 每个key需要计算hash的次数
 
  public:
   explicit BloomFilterPolicy(int bits_per_key)
@@ -80,6 +82,7 @@ class BloomFilterPolicy : public FilterPolicy {
     const uint32_t delta = (h >> 17) | (h << 15);  // Rotate right 17 bits
     for (size_t j = 0; j < k; j++) {
       const uint32_t bitpos = h % bits;
+      // 进行验证bitpos,必须k次数据都必须为1,否则出错
       if ((array[bitpos/8] & (1 << (bitpos % 8))) == 0) return false;
       h += delta;
     }

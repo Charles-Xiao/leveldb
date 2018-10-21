@@ -40,11 +40,12 @@ namespace {
 
 // An entry is a variable length heap-allocated structure.  Entries
 // are kept in a circular doubly linked list ordered by access time.
+// 每一个 LRUHandle 即是 HashTable 中的一个节点
 struct LRUHandle {
   void* value;
   void (*deleter)(const Slice&, void* value);
-  LRUHandle* next_hash;
-  LRUHandle* next;
+  LRUHandle* next_hash; // 代表在hash桶中下一个元素的位置，key的哈希冲突情况
+  LRUHandle* next; // LRU双向链表指针
   LRUHandle* prev;
   size_t charge;      // TODO(opt): Only allow uint32_t?
   size_t key_length;
@@ -62,8 +63,8 @@ struct LRUHandle {
   }
 };
 
-// We provide our own simple hash table since it removes a whole bunch
-// of porting hacks and is also faster than some of the built-in hash
+// We provide our own simple hash table（HashTable）since it removes a whole bunch
+// of porting hacks（可移植性强）and is also faster than some of the built-in hash
 // table implementations in some of the compiler/runtime combinations
 // we have tested.  E.g., readrandom speeds up by ~5% over the g++
 // 4.4.3's builtin hashtable.
@@ -79,8 +80,9 @@ class HandleTable {
   LRUHandle* Insert(LRUHandle* h) {
     LRUHandle** ptr = FindPointer(h->key(), h->hash);
     LRUHandle* old = *ptr;
+    // h节点不存在于hashtable则直接插到尾部，存在则修改前后指针
     h->next_hash = (old == nullptr ? nullptr : old->next_hash);
-    *ptr = h;
+    *ptr = h; // 覆盖原节点
     if (old == nullptr) {
       ++elems_;
       if (elems_ > length_) {
@@ -96,7 +98,7 @@ class HandleTable {
     LRUHandle** ptr = FindPointer(key, hash);
     LRUHandle* result = *ptr;
     if (result != nullptr) {
-      *ptr = result->next_hash;
+      *ptr = result->next_hash; // 用下一个节点覆盖当前节点，即删除了当前节点
       --elems_;
     }
     return result;
@@ -107,26 +109,27 @@ class HandleTable {
   // a linked list of cache entries that hash into the bucket.
   uint32_t length_;
   uint32_t elems_;
-  LRUHandle** list_;
+  LRUHandle** list_; // 指针的指针
 
   // Return a pointer to slot that points to a cache entry that
   // matches key/hash.  If there is no such cache entry, return a
   // pointer to the trailing slot in the corresponding linked list.
   LRUHandle** FindPointer(const Slice& key, uint32_t hash) {
-    LRUHandle** ptr = &list_[hash & (length_ - 1)];
+    LRUHandle** ptr = &list_[hash & (length_ - 1)]; // 找到hash值对应的table中位置
     while (*ptr != nullptr &&
            ((*ptr)->hash != hash || key != (*ptr)->key())) {
-      ptr = &(*ptr)->next_hash;
+      ptr = &(*ptr)->next_hash; // 查找哈希冲突链表中的下一个key
     }
     return ptr;
   }
 
+  // 扩容操作会占用锁，阻塞多线程操作
   void Resize() {
     uint32_t new_length = 4;
     while (new_length < elems_) {
       new_length *= 2;
     }
-    LRUHandle** new_list = new LRUHandle*[new_length];
+    LRUHandle** new_list = new LRUHandle*[new_length]; // 指针数组
     memset(new_list, 0, sizeof(new_list[0]) * new_length);
     uint32_t count = 0;
     for (uint32_t i = 0; i < length_; i++) {
@@ -134,7 +137,7 @@ class HandleTable {
       while (h != nullptr) {
         LRUHandle* next = h->next_hash;
         uint32_t hash = h->hash;
-        LRUHandle** ptr = &new_list[hash & (new_length - 1)];
+        LRUHandle** ptr = &new_list[hash & (new_length - 1)]; //  hash%new_length = hash & (new_length-1)
         h->next_hash = *ptr;
         *ptr = h;
         h = next;
@@ -148,7 +151,8 @@ class HandleTable {
   }
 };
 
-// A single shard of sharded cache.
+// A single shard of sharded cache. HashTable 和 LRU 双向链表的结合
+// hashtable实现O(1)存取时间复杂度; 双向链表实现每次读取或者插入元素都在链表head，每次淘汰链表tail
 class LRUCache {
  public:
   LRUCache();
@@ -178,22 +182,22 @@ class LRUCache {
   bool FinishErase(LRUHandle* e) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Initialized before use.
-  size_t capacity_;
+  size_t capacity_; // LRUCache存储的元素个数，超过此个数触发淘汰机制
 
   // mutex_ protects the following state.
-  mutable port::Mutex mutex_;
+  mutable port::Mutex mutex_; // 修改LRUCache时的并发保护
   size_t usage_ GUARDED_BY(mutex_);
 
   // Dummy head of LRU list.
-  // lru.prev is newest entry, lru.next is oldest entry.
+  // lru.prev is newest entry, lru.next is oldest entry. 重点！
   // Entries have refs==1 and in_cache==true.
-  LRUHandle lru_ GUARDED_BY(mutex_);
+  LRUHandle lru_ GUARDED_BY(mutex_); // 按照访问时间顺序存储的双向循环链表
 
   // Dummy head of in-use list.
   // Entries are in use by clients, and have refs >= 2 and in_cache==true.
   LRUHandle in_use_ GUARDED_BY(mutex_);
 
-  HandleTable table_ GUARDED_BY(mutex_);
+  HandleTable table_ GUARDED_BY(mutex_); // 拉链式hashTable
 };
 
 LRUCache::LRUCache()
@@ -244,6 +248,7 @@ void LRUCache::LRU_Remove(LRUHandle* e) {
   e->prev->next = e->next;
 }
 
+// 插入节点到链表表头
 void LRUCache::LRU_Append(LRUHandle* list, LRUHandle* e) {
   // Make "e" newest entry by inserting just before *list
   e->next = list;
@@ -266,6 +271,7 @@ void LRUCache::Release(Cache::Handle* handle) {
   Unref(reinterpret_cast<LRUHandle*>(handle));
 }
 
+//  LRUCache 内的 Handle 分为四个状态
 Cache::Handle* LRUCache::Insert(
     const Slice& key, uint32_t hash, void* value, size_t charge,
     void (*deleter)(const Slice& key, void* value)) {
@@ -285,13 +291,14 @@ Cache::Handle* LRUCache::Insert(
   if (capacity_ > 0) {
     e->refs++;  // for the cache's reference.
     e->in_cache = true;
-    LRU_Append(&in_use_, e);
+    LRU_Append(&in_use_, e); // 插入到链表头位置
     usage_ += charge;
-    FinishErase(table_.Insert(e));
+    FinishErase(table_.Insert(e)); // 删除原节点
   } else {  // don't cache. (capacity_==0 is supported and turns off caching.)
     // next is read by key() in an assert, so it must be initialized
     e->next = nullptr;
   }
+  // LRU释放空间，淘汰尾部节点lru_.next
   while (usage_ > capacity_ && lru_.next != &lru_) {
     LRUHandle* old = lru_.next;
     assert(old->refs == 1);
@@ -335,11 +342,13 @@ void LRUCache::Prune() {
 }
 
 static const int kNumShardBits = 4;
-static const int kNumShards = 1 << kNumShardBits;
+static const int kNumShards = 1 << kNumShardBits; // 16个LRUCache数组
 
+// 内部16个LRUCache, 每次操作先根据hash值的最高4位来确定当前应该在哪个LRUCache中查找; 
+// 因为LRUCache的查找，插入和释放需要加锁, 16个并发降低了锁的粒度，提高访问效率, 类似于分段锁思想
 class ShardedLRUCache : public Cache {
  private:
-  LRUCache shard_[kNumShards];
+  LRUCache shard_[kNumShards]; 
   port::Mutex id_mutex_;
   uint64_t last_id_;
 

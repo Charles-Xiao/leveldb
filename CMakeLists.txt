@@ -2,7 +2,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+# CMake最低版本号要求
 cmake_minimum_required(VERSION 3.9)
+# 项目信息
 project(leveldb VERSION 1.21.0 LANGUAGES C CXX)
 
 # This project can use C11, but will gracefully decay down to C89.
@@ -79,6 +81,7 @@ if(BUILD_SHARED_LIBS)
   add_compile_options(-fvisibility=hidden)
 endif(BUILD_SHARED_LIBS)
 
+# 生成链接库leveldb
 add_library(leveldb "")
 target_sources(leveldb
   PRIVATE
@@ -149,7 +152,6 @@ target_sources(leveldb
     "${PROJECT_SOURCE_DIR}/util/logging.cc"
     "${PROJECT_SOURCE_DIR}/util/logging.h"
     "${PROJECT_SOURCE_DIR}/util/mutexlock.h"
-    "${PROJECT_SOURCE_DIR}/util/no_destructor.h"
     "${PROJECT_SOURCE_DIR}/util/options.cc"
     "${PROJECT_SOURCE_DIR}/util/random.h"
     "${PROJECT_SOURCE_DIR}/util/status.cc"
@@ -234,9 +236,11 @@ endif(HAVE_TCMALLOC)
 find_package(Threads REQUIRED)
 target_link_libraries(leveldb Threads::Threads)
 
+# 将名为 leveldbutil.cc 的源文件编译成一个leveldbutil 的可执行文件
 add_executable(leveldbutil
   "${PROJECT_SOURCE_DIR}/db/leveldbutil.cc"
 )
+# 指明可执行文件leveldbutil需要连接一个名为 leveldb 的链接库
 target_link_libraries(leveldbutil leveldb)
 
 if(LEVELDB_BUILD_TESTS)
@@ -279,7 +283,6 @@ if(LEVELDB_BUILD_TESTS)
 
   leveldb_test("${PROJECT_SOURCE_DIR}/util/env_test.cc")
   leveldb_test("${PROJECT_SOURCE_DIR}/util/status_test.cc")
-  leveldb_test("${PROJECT_SOURCE_DIR}/util/no_destructor_test.cc")
 
   if(NOT BUILD_SHARED_LIBS)
     leveldb_test("${PROJECT_SOURCE_DIR}/db/autocompact_test.cc")

@@ -38,8 +38,8 @@ class LEVELDB_EXPORT Slice {
   Slice(const char* s) : data_(s), size_(strlen(s)) { }
 
   // Intentionally copyable.
-  Slice(const Slice&) = default;
-  Slice& operator=(const Slice&) = default;
+  Slice(const Slice&) = default; // 类的特殊成员函数声明为 defaulted 函数，编译器将为显式声明的 defaulted 函数自动生成函数体
+  Slice& operator=(const Slice&) = default; // 同理，只需在函数声明后加上“=delete;”，就可将该函数禁用
 
   // Return a pointer to the beginning of the referenced data
   const char* data() const { return data_; }
@@ -98,7 +98,7 @@ inline bool operator!=(const Slice& x, const Slice& y) {
 
 inline int Slice::compare(const Slice& b) const {
   const size_t min_len = (size_ < b.size_) ? size_ : b.size_;
-  int r = memcmp(data_, b.data_, min_len);
+  int r = memcmp(data_, b.data_, min_len); // 先比较前min_len个字符，如果相等再比较两者长度
   if (r == 0) {
     if (size_ < b.size_) r = -1;
     else if (size_ > b.size_) r = +1;

@@ -35,7 +35,8 @@
 // HAVE_FDATASYNC is defined in the auto-generated port_config.h, which is
 // included by port_stdcxx.h.
 #if !HAVE_FDATASYNC
-#define fdatasync fsync
+// 实现内存到块设备的数据同步；fdatasync在同步时仅仅写入文件数据和文件大小而不写入其他的 metadata，这样能够减少 IO 操作从而提高写盘效率。linux已经不作区分
+#define fdatasync fsync 
 #endif  // !HAVE_FDATASYNC
 
 namespace leveldb {
@@ -91,9 +92,10 @@ class Limiter {
   //
   // This is a counter and is not tied to the invariants of any other class, so
   // it can be operated on safely using std::memory_order_relaxed.
-  std::atomic<int> acquires_allowed_;
+  std::atomic<int> acquires_allowed_; // 变量原子操作
 };
 
+// 负责实现顺序读的功能
 class PosixSequentialFile: public SequentialFile {
  private:
   std::string filename_;
@@ -104,10 +106,11 @@ class PosixSequentialFile: public SequentialFile {
       : filename_(fname), fd_(fd) {}
   virtual ~PosixSequentialFile() { close(fd_); }
 
+  // 从当前位置顺序的读出 n 字节数据
   virtual Status Read(size_t n, Slice* result, char* scratch) {
     Status s;
     while (true) {
-      ssize_t r = read(fd_, scratch, n);
+      ssize_t r = read(fd_, scratch, n); // 读取fd_数据保存到缓冲区scratch, 返回读取的字节数
       if (r < 0) {
         if (errno == EINTR) {
           continue;  // Retry
@@ -121,6 +124,7 @@ class PosixSequentialFile: public SequentialFile {
     return s;
   }
 
+// fd_从目前的读写位置SEEK_CUR往后位移n
   virtual Status Skip(uint64_t n) {
     if (lseek(fd_, n, SEEK_CUR) == static_cast<off_t>(-1)) {
       return PosixError(filename_, errno);
@@ -129,6 +133,7 @@ class PosixSequentialFile: public SequentialFile {
   }
 };
 
+// 随机读功能
 // pread() based random-access
 class PosixRandomAccessFile: public RandomAccessFile {
  private:
@@ -155,6 +160,7 @@ class PosixRandomAccessFile: public RandomAccessFile {
     }
   }
 
+// lseek+write=pwrite ; lseek+read=pread
   virtual Status Read(uint64_t offset, size_t n, Slice* result,
                       char* scratch) const {
     int fd = fd_;
@@ -166,6 +172,7 @@ class PosixRandomAccessFile: public RandomAccessFile {
     }
 
     Status s;
+    // pread函数用于从打开文件的指定位置开始读取数据, pread操作不会更新文件指针, 原子操作：定位+读取
     ssize_t r = pread(fd, scratch, n, static_cast<off_t>(offset));
     *result = Slice(scratch, (r < 0) ? 0 : r);
     if (r < 0) {
@@ -180,11 +187,14 @@ class PosixRandomAccessFile: public RandomAccessFile {
   }
 };
 
+// 使用内存映射文件来实现对于文件的随机访问, 随机访问将如同操作内存中的字节数组一样简单
+// mmap()用于分配虚拟内存，物理内存直接映射到用户虚拟内存；
+// it maps a chunk of file/device memory/whatever into the process' space, so that it can directly access the content by just accessing the memory.
 // mmap() based random-access
 class PosixMmapReadableFile: public RandomAccessFile {
  private:
   std::string filename_;
-  void* mmapped_region_;
+  void* mmapped_region_; // 内存映射
   size_t length_;
   Limiter* limiter_;
 
@@ -214,6 +224,7 @@ class PosixMmapReadableFile: public RandomAccessFile {
   }
 };
 
+// 追加写功能
 class PosixWritableFile final : public WritableFile {
  public:
   PosixWritableFile(std::string filename, int fd)
@@ -295,6 +306,7 @@ class PosixWritableFile final : public WritableFile {
     return status;
   }
 
+  // 缓冲区写入块设备
   Status WriteUnbuffered(const char* data, size_t size) {
     while (size > 0) {
       ssize_t write_result = ::write(fd_, data, size);
@@ -375,6 +387,7 @@ class PosixWritableFile final : public WritableFile {
   const std::string dirname_;  // The directory of filename_.
 };
 
+// leveldb 并没有对文件实现细粒度的锁控制，而是每次都对整个文件进行加锁
 static int LockOrUnlock(int fd, bool lock) {
   errno = 0;
   struct flock f;
@@ -383,9 +396,10 @@ static int LockOrUnlock(int fd, bool lock) {
   f.l_whence = SEEK_SET;
   f.l_start = 0;
   f.l_len = 0;        // Lock/unlock entire file
-  return fcntl(fd, F_SETLK, &f);
+  return fcntl(fd, F_SETLK, &f); // linux加解锁函数：http://man7.org/linux/man-pages/man2/fcntl.2.html
 }
 
+// 文件锁
 class PosixFileLock : public FileLock {
  public:
   int fd_;
@@ -438,11 +452,11 @@ class PosixEnv : public Env {
     int fd = open(fname.c_str(), O_RDONLY);
     if (fd < 0) {
       s = PosixError(fname, errno);
-    } else if (mmap_limit_.Acquire()) {
+    } else if (mmap_limit_.Acquire()) { // 首先调用 mmap_limit_.Acquire() 来测试当前的系统是否还允许生成 PosixMmapReadableFile
       uint64_t size;
       s = GetFileSize(fname, &size);
       if (s.ok()) {
-        void* base = mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
+        void* base = mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0); // 调用mmap系统调用来将文件映射到一块连续的虚拟内存上
         if (base != MAP_FAILED) {
           *result = new PosixMmapReadableFile(fname, base, size, &mmap_limit_);
         } else {
@@ -548,6 +562,7 @@ class PosixEnv : public Env {
     return result;
   }
 
+  // FileLock 文件锁
   virtual Status LockFile(const std::string& fname, FileLock** lock) {
     *lock = nullptr;
     Status result;
@@ -560,7 +575,7 @@ class PosixEnv : public Env {
     } else if (LockOrUnlock(fd, true) == -1) {
       result = PosixError("lock " + fname, errno);
       close(fd);
-      locks_.Remove(fname);
+      locks_.Remove(fname); // 加锁失败就remove
     } else {
       PosixFileLock* my_lock = new PosixFileLock;
       my_lock->fd_ = fd;
@@ -650,8 +665,8 @@ class PosixEnv : public Env {
   std::queue<BackgroundWorkItem> background_work_queue_
       GUARDED_BY(background_work_mutex_);
 
-  PosixLockTable locks_;
-  Limiter mmap_limit_;
+  PosixLockTable locks_; // 保存加了锁的文件
+  Limiter mmap_limit_; // 限制打开的 PosixMmapReadableFile 的实例数量
   Limiter fd_limit_;
 };
 

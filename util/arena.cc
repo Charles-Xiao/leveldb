@@ -7,13 +7,15 @@
 
 namespace leveldb {
 
-static const int kBlockSize = 4096;
+static const int kBlockSize = 4096; // 每个block 4kB
 
 Arena::Arena() : memory_usage_(0) {
   alloc_ptr_ = nullptr;  // First allocation will allocate a block
   alloc_bytes_remaining_ = 0;
 }
 
+// 每次新建一个 memtable 的同时都会新建一个 Arena 管理器
+// 而每次释放一个 memtable 的过程都会析构掉其 Arena 管理器
 Arena::~Arena() {
   for (size_t i = 0; i < blocks_.size(); i++) {
     delete[] blocks_[i];
@@ -24,20 +26,21 @@ char* Arena::AllocateFallback(size_t bytes) {
   if (bytes > kBlockSize / 4) {
     // Object is more than a quarter of our block size.  Allocate it separately
     // to avoid wasting too much space in leftover bytes.
-    char* result = AllocateNewBlock(bytes);
+    char* result = AllocateNewBlock(bytes); // 申请bytes大小的block
     return result;
   }
 
-  // We waste the remaining space in the current block.
+  // We waste the remaining space in the current block. 1/4
   alloc_ptr_ = AllocateNewBlock(kBlockSize);
   alloc_bytes_remaining_ = kBlockSize;
 
-  char* result = alloc_ptr_;
+  char* result = alloc_ptr_; // 指针拷贝给result作为return值
   alloc_ptr_ += bytes;
   alloc_bytes_remaining_ -= bytes;
   return result;
 }
 
+// 内存对齐
 char* Arena::AllocateAligned(size_t bytes) {
   const int align = (sizeof(void*) > 8) ? sizeof(void*) : 8;
   assert((align & (align-1)) == 0);   // Pointer size should be a power of 2

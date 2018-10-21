@@ -16,6 +16,8 @@ namespace leveldb {
 class InternalKeyComparator;
 class MemTableIterator;
 
+// leveldb 中的 MemTable 基于跳表 SkipList 来实现对于键值对的有序管理
+// 通过内存管理器 Arena 来为插入的 key/value 对申请内存，并通过记录引用数量 refs_ 来决定内存释放
 class MemTable {
  public:
   // MemTables are reference counted.  The initial reference count

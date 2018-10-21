@@ -55,6 +55,8 @@ bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
                            const Slice* smallest_user_key,
                            const Slice* largest_user_key);
 
+// Version代表了某一时刻的数据库版本信息，版本信息的主要内容是当前各个Level的SSTable数据文件列表, 包括每个文件所属的层级、大小、编号（名称等）
+// compaction操作会引起版本更新
 class Version {
  public:
   // Append to *iters a sequence of iterators that will
@@ -161,6 +163,7 @@ class Version {
   void operator=(const Version&);
 };
 
+// 维护了一份Version列表，包含当前Alive的所有Version信息，列表中第一个代表数据库的当前版本
 class VersionSet {
  public:
   VersionSet(const std::string& dbname,
